@@ -10,6 +10,7 @@ NOTE: Prefill has not been modelled. Prefill and decode are assumed to take same
 '''
 import random
 import time
+from pathlib import Path
 
 ####----------------------------------- Logging Setup --------------------------------------
 import logging
@@ -17,6 +18,8 @@ logger = logging.getLogger(__name__)
 #FORMAT = "[%(filename)s:%(lineno)s - %(funcName)20s() - %(levelname)-5.5s] %(message)s"
 FORMAT = "[%(levelname)-5.5s] %(message)s"
 PRINT_WHERE = "FILE_ONLY"  ## [FILE_ONLY, TERMINAL]
+
+Path("logs").mkdir(exist_ok=True)
 
 if PRINT_WHERE == "TERMINAL":
 ##### To Print to both file and terminal
@@ -51,7 +54,7 @@ class Clock:
         step_time is typically one iteration of vllm, rougly equal to the decode time
         '''
         self.start_time = start_time
-        self.step_time  = step_time  
+        self.step_time  = step_time
 
         self.curr_time  = start_time
 
@@ -63,7 +66,7 @@ class Clock:
 
     def get_curr_time(self):
         return self.curr_time
-    
+
 
 class Model():
     def __init__(self, model_id, model_size = 25000, kvcache_per_token = KVC_PER_TOKEN, decode_time = DECODE_TIME, prefill_time = PREFILL_TIME):
@@ -73,7 +76,7 @@ class Model():
         self.PrefillTime     = prefill_time        # in ms
         self.DecodeTime      = decode_time         # in ms
 
-    def run_one_iteration(self, request_list=[], any_prefill = False):  # TODO: Add prefill time consideration 
+    def run_one_iteration(self, request_list=[], any_prefill = False):  # TODO: Add prefill time consideration
         return DECODE_TIME                     # time duration of one forward run as a function of requests scheduled
 
 
@@ -111,7 +114,7 @@ class Device:
         self.mem_usage = self.mem_usage - mem_release
         assert self.mem_usage >=0
         return True
-    
+
     def load_model(self, model : Model):
         '''
         Reserve memeory for model weights
@@ -124,7 +127,7 @@ class Device:
             return self.get_available_memory()
         else:
             raise Exception("A Model already loaded. Not allowed to load another model")
-    
+
     def remove_model(self, model : Model):
         if self.loaded_model is not None:
             self.mem_usage = self.mem_usage - model.ModelSize
@@ -140,7 +143,7 @@ class Request:
         self.ReqId             = req_id
         self.InputTokenLength  = input_token_length
         self.OutputTokenLength = output_token_length  # in real, this is not known. For modelling, we use this to predefine request size
-    
+
         self.token_len         = input_token_length  # Current token length
 
 
@@ -148,11 +151,11 @@ class RequestElement(Request):
     '''
     Request when added to the serving system (it'll be in one queue or the other - eg: vllm running q, or waiting q or global q)
     '''
-    def __init__(self, req_id, input_token_length, output_token_length = MAX_SEQ_LEN, arrival_time = None, priority_class = 0,  ttft = INF, slo = INF):   
+    def __init__(self, req_id, input_token_length, output_token_length = MAX_SEQ_LEN, arrival_time = None, priority_class = 0,  ttft = INF, slo = INF):
         Request.__init__(self, req_id, input_token_length, output_token_length)
-         
+
         self.TTFT  = ttft                      # Expected TTFT to be met
-        self.SLO   = slo                       # NOTE: not used  
+        self.SLO   = slo                       # NOTE: not used
         self.PriorityClass = priority_class    # higher class is higher priority
 
         self.arrival_time = arrival_time       # Time when the request arrived at the serving system
@@ -160,10 +163,10 @@ class RequestElement(Request):
         self.ttft_met_time = INF               # TTFT from arrival time
         self.token_times = []                  # Times at which each token of the sequence was generated
 
-        self.stage       = 'not_run_yet'       # 'not_run_yet', 'waiting', 'decode' or 'prefill' or 'finished' # NOTE: not using prefill currently 
+        self.stage       = 'not_run_yet'       # 'not_run_yet', 'waiting', 'decode' or 'prefill' or 'finished' # NOTE: not using prefill currently
 
 
-    def add_new_tokens(self, num_tokens, curr_time):  
+    def add_new_tokens(self, num_tokens, curr_time):
         '''
         As LLM generates new token, add it to the request element.
         Returns actual number of tokens added
@@ -180,7 +183,7 @@ class RequestElement(Request):
             self.stage = 'finished'
             self.completion_time = curr_time
         return self.token_len                 ## NOTE: Currently not checked since we only generate one token at a time. Will change when adding speculative decoding
-            
+
     def _is_request_complete(self):
         '''
         Note: For modelling, we assume that the request lengths are preset
@@ -189,7 +192,7 @@ class RequestElement(Request):
             return False
         else:
             return True
-        
+
 ##---------------------------------------------------------------- vLLM Model ------------------------------------------------------------------------
 
 ## Source: https://realpython.com/inherit-python-list/
@@ -225,7 +228,7 @@ class SortedByTokenLenList(list):
         super().append(item)
         super().sort(key=lambda x: x.token_len)
 
-    
+
 #new_list = sorted(orig_list, key=lambda x: x.count, reverse=True)
 #orig_list.sort(key=lambda x: x.count, reverse=True)
 
@@ -258,20 +261,20 @@ class vLLM():
 
     def print_spec(self):
         print("\n--------------------------******** Current Specs ************--------------------------")
-        print("Time in sec:                  ", self.Clock.get_curr_time()/1000) 
+        print("Time in sec:                  ", self.Clock.get_curr_time()/1000)
         print("Device memory available:      ", self.Device.get_available_memory())
         print("Length of vllm running queue: ", len(self.running_queue))
         print("Length of vllm waiting queue: ", len(self.waiting_queue))
         print("Number of Finished requests:  ", len(self.finished_queue))
-        
+
 
     def _mem_requirement(self, request :RequestElement):
         '''Memory requirement given a request on this model'''
-        return (request.token_len) * self.Model.KVcachePerToken 
+        return (request.token_len) * self.Model.KVcachePerToken
 
-    def _can_request_run(self, request : RequestElement):  
+    def _can_request_run(self, request : RequestElement):
         '''
-        Checks if this device has enough memory to run this request for atlest one token. 
+        Checks if this device has enough memory to run this request for atlest one token.
         Has to account for all current requests on the device
         '''
         #print(f"Can run: {request.ReqId}, {request.token_len}")
@@ -307,14 +310,14 @@ class vLLM():
         self.Device.release_memory(self._mem_requirement(request))
         self.running_queue.remove(request)
         return
-        
+
     def _remove_from_waiting_queue(self, request : RequestElement):
         '''
         Same as _remove_from_running_queue() for waiting queue
         '''
         self.waiting_queue.remove(request)
         return
-    
+
 
     ### TODO: Policy for eviction between running and waiting queue of VLLM
     def _move_from_running_to_waiting_queue(self): # NOTE: currently just moves tail of running queue to the head of running queue
@@ -331,8 +334,8 @@ class vLLM():
         head_req = self.waiting_queue.pop(0)
         logger.info(f" --> Adding request ** {head_req.ReqId} ** to running queue with token length of ** {head_req.token_len} **. Memory Available: {self.Device.get_available_memory()} ")
         self._add_to_running_queue(head_req)
-        
-    
+
+
     def _add_to_vllm_queue(self, request: RequestElement):
         '''
         Adds to waiting queue. But if waiting queue is empty adds to running queue
@@ -344,8 +347,8 @@ class vLLM():
                 self._add_to_waiting_queue(request)
         else:
             self._add_to_waiting_queue(request)
-        
-    
+
+
     def add_new_request(self, request: RequestElement):    #TODO: We assume only 1 vLLM instance. Eventually the Request will be added as Request element at a global queue and then fed to vLLM queue
         '''
         Add a new request to vLLM quque. Either it runs right away or waits at the end of waiting queue
@@ -365,7 +368,7 @@ class vLLM():
                 mem_required_next_run -=  self.Model.KVcachePerToken * 1
                 eviction_needed = True
         return eviction_needed
-    
+
     def _add_requests_for_next_iteration(self):
         while True:
             if len(self.waiting_queue) > 0:
@@ -387,9 +390,9 @@ class vLLM():
         # TODO: In speculative decoding, there might be more than one token for some requets
         ## Step all running requests by one
         #logger.critical("------------- vLLM iteration starting: generating next set of tokens -----------")
-        curr_time = self.Clock.time_step() 
+        curr_time = self.Clock.time_step()
         for req in self.running_queue:
-            no_new_tokens = 1                                         # TODO: Assumes ony one token per request 
+            no_new_tokens = 1                                         # TODO: Assumes ony one token per request
             mem_required = self.Model.KVcachePerToken * no_new_tokens
             self.Device.use_memory(mem_required)
             req.add_new_tokens(no_new_tokens, curr_time)
@@ -399,7 +402,7 @@ class vLLM():
                 logger.info(f"~*~ Finished request {req.ReqId}. Output token length {req.token_len}")
 
         #logger.critical("******** Making eviction and admitting decisions for next iteration ******")
-        if not self._evict_requests_for_next_iteration():   ## TODO: In iteration we evict requests we dont add any request, since evicted request will be at head of waiting quque. 
+        if not self._evict_requests_for_next_iteration():   ## TODO: In iteration we evict requests we dont add any request, since evicted request will be at head of waiting quque.
             self._add_requests_for_next_iteration()
 
     def run(self):
@@ -432,7 +435,3 @@ class Load():
 
     def get_output_len(self, input_len):
         return input_len + self._get_generated_len()
-
-
-
-
