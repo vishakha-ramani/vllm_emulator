@@ -44,7 +44,7 @@ class ChatCompletionRequest(BaseModel):
 
 app = FastAPI(title="OpenAI-compatible API")
 
-@app.post("/chat/completions")
+@app.post("/v1/chat/completions")
 async def chat_completions(request: ChatCompletionRequest):
 
     ## https://stackoverflow.com/questions/76913406/how-allow-fastapi-to-handle-multiple-requests-at-the-same-time
@@ -52,7 +52,7 @@ async def chat_completions(request: ChatCompletionRequest):
     async def sleep_async(rid):
         await asyncio.sleep(0.2)
         print(f"Waiting for completion {rid}")
-    
+
 
     input_seq = request.messages[-1].content
 
@@ -71,22 +71,19 @@ async def chat_completions(request: ChatCompletionRequest):
        complete = vllmi.remove_finished_request(reqi)
        await asyncio.sleep(0.5)                               #TODO: Sleep spinning to check very bad! Replace
 
-    
+
     if request.messages and request.messages[0].role == 'user':
       resp_content = f"Request stats: arrival time = {reqi.arrival_time}, completion time = {reqi.completion_time}, ttft = {reqi.ttft_met_time}, input_token_len = {reqi.InputTokenLength}, output_token_len = {reqi.token_len}"
     else:
       resp_content = "Empty message sent!"
 
-    
+
     return {
         "id": req_id,
         "object": "chat.completion",
-        "created": time.time(),
+        "created": int(time.time()),
         "model": request.model,
         "choices": [{
             "message": ChatMessage(role="assistant", content=resp_content)
         }]
     }
-
-
-

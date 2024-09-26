@@ -4,7 +4,7 @@ from openai import OpenAI
 # init client and connect to localhost server
 client = OpenAI(
     api_key="fake-api-key",
-    base_url="http://localhost:8000" # change the default port if needed
+    base_url="http://localhost:8000/v1" # change the default port if needed
 )
 
 # call API
@@ -18,5 +18,5 @@ chat_completion = client.chat.completions.create(
     model="gpt-1337-turbo-pro-max",
 )
 
-# print the top "choice" 
+# print the top "choice"
 print(chat_completion.choices[0].message.content)
