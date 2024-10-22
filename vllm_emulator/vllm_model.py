@@ -9,8 +9,9 @@ NOTE: Prefill has not been modelled. Prefill and decode are assumed to take same
 
 '''
 import random
-import time
+import asyncio
 from pathlib import Path
+from metrics import Metrics
 
 ####----------------------------------- Logging Setup --------------------------------------
 import logging
@@ -44,7 +45,7 @@ MAX_SEQ_LEN   = 2048      # TODO: Currently not used
 INF           = float('inf')
 
 REALTIME_FLAG = True     # Simulation will be realtime. Each clock step will have a sleep of step_time
-MUTE_PRINT    = True
+MUTE_PRINT    = False
 
 ###------------------------------- Classes ----------------------------------------------
 
@@ -58,9 +59,9 @@ class Clock:
 
         self.curr_time  = start_time
 
-    def time_step(self, no_steps=1):
+    async def time_step(self, no_steps=1):
         if REALTIME_FLAG:
-            time.sleep(no_steps*self.step_time/1000)  #sleep in sec
+            await asyncio.sleep(no_steps*self.step_time/1000)  #sleep in sec
         self.curr_time = self.curr_time + no_steps*self.step_time
         return self.curr_time
 
@@ -69,8 +70,8 @@ class Clock:
 
 
 class Model():
-    def __init__(self, model_id, model_size = 25000, kvcache_per_token = KVC_PER_TOKEN, decode_time = DECODE_TIME, prefill_time = PREFILL_TIME):
-        self.model_id        = model_id
+    def __init__(self, model_name, model_size = 25000, kvcache_per_token = KVC_PER_TOKEN, decode_time = DECODE_TIME, prefill_time = PREFILL_TIME):
+        self.model_name      = model_name
         self.KVcachePerToken = kvcache_per_token
         self.ModelSize       = model_size          ## size in MB
         self.PrefillTime     = prefill_time        # in ms
@@ -81,14 +82,16 @@ class Model():
 
 
 class Device:
-    def __init__(self, device_id, net_memory, useable_ratio = 0.8 ):
-        self.DevId         =  device_id
+    def __init__(self, device_id, net_memory, metrics, model_name, useable_ratio = 0.8):
+        self.DevId         = device_id
         self.Memory        = net_memory
         self.useable_ratio = useable_ratio
         self.mem_usage     = 0                # used memory at any give time
         self.running_req   = []               # set of running requests at given time
 
         self.loaded_model = None              # Object of Model() # Assumes only one model loaded at a time
+        self.model_name = model_name
+        self.metrics = metrics
 
     def get_available_memory(self):
         '''How much free memory does the device have'''
@@ -104,26 +107,29 @@ class Device:
             return False
 
     def use_memory(self, mem_request):
-        '''Use specified amount of memory. Raise error if enough memeory isn't available'''
+        '''Use specified amount of memory. Raise error if enough memory isn't available'''
         logger.debug(f"Device {self.DevId} memory request of {mem_request}. Available memory on device = {self.get_available_memory()}")
         assert self.check_memory_availability(mem_request)
         self.mem_usage = self.mem_usage + mem_request
+        self._update_metrics()
         return True
 
     def release_memory(self, mem_release):
         self.mem_usage = self.mem_usage - mem_release
         assert self.mem_usage >=0
+        self._update_metrics()
         return True
 
     def load_model(self, model : Model):
         '''
-        Reserve memeory for model weights
+        Reserve memory for model weights
         model: object of Model()
         '''
         if self.loaded_model is None:
             assert self.check_memory_availability(model.ModelSize)
             self.mem_usage = self.mem_usage + model.ModelSize
             self.loaded_model = model
+            self._update_metrics()
             return self.get_available_memory()
         else:
             raise Exception("A Model already loaded. Not allowed to load another model")
@@ -133,9 +139,15 @@ class Device:
             self.mem_usage = self.mem_usage - model.ModelSize
             assert self.mem_usage >=0
             self.loaded_model = None
+            self._update_metrics()
             return True
         else:
             return False
+
+    def _update_metrics(self):
+        usagePercent = self.mem_usage / self.Memory * 100.0
+        self.metrics.gauge_gpu_cache_usage.labels(model_name=self.model_name).set(usagePercent)
+
 
 
 class Request:
@@ -164,6 +176,8 @@ class RequestElement(Request):
         self.token_times = []                  # Times at which each token of the sequence was generated
 
         self.stage       = 'not_run_yet'       # 'not_run_yet', 'waiting', 'decode' or 'prefill' or 'finished' # NOTE: not using prefill currently
+
+        self.event = None                      # completion event to be set when the request terminates
 
 
     def add_new_tokens(self, num_tokens, curr_time):
@@ -246,7 +260,7 @@ class vLLM():
     Class models then functioning of vLLM. Child classes can be created to emulate
     different run queue, waiting queue policies etc.
     '''
-    def __init__(self, device : Device, clock : Clock, model : Model):
+    def __init__(self, device : Device, clock : Clock, model : Model, metrics : Metrics):
         self.Device = device
         self.Clock = clock
         self.Model = model
@@ -258,6 +272,12 @@ class vLLM():
         self.stop    = False
 
         self.max_kvcache_mem = self.Device.load_model(self.Model)
+        self.metrics = metrics
+
+    async def run_print_spec(self):
+        while True:
+          self.print_spec()
+          await asyncio.sleep(2)
 
     def print_spec(self):
         print("\n--------------------------******** Current Specs ************--------------------------")
@@ -294,6 +314,7 @@ class vLLM():
         assert self._can_request_run(request)
         self.Device.use_memory(self._mem_requirement(request))
         self.running_queue.append(request)
+        self.metrics.gauge_scheduler_running.labels(model_name=self.Model.model_name).inc()
 
     def _add_to_waiting_queue(self, request : RequestElement):
         '''
@@ -301,6 +322,7 @@ class vLLM():
         TODO: waiting_queue's append can be modified to do more elaborate append eg: priority queue
         '''
         self.waiting_queue.append(request)
+        self.metrics.gauge_scheduler_waiting.labels(model_name=self.Model.model_name).inc()
 
     def _remove_from_running_queue(self, request : RequestElement):
         '''
@@ -309,14 +331,14 @@ class vLLM():
         '''
         self.Device.release_memory(self._mem_requirement(request))
         self.running_queue.remove(request)
-        return
+        self.metrics.gauge_scheduler_running.labels(model_name=self.Model.model_name).dec()
 
     def _remove_from_waiting_queue(self, request : RequestElement):
         '''
         Same as _remove_from_running_queue() for waiting queue
         '''
         self.waiting_queue.remove(request)
-        return
+        self.metrics.gauge_scheduler_waiting.labels(model_name=self.Model.model_name).dec()
 
 
     ### TODO: Policy for eviction between running and waiting queue of VLLM
@@ -335,7 +357,6 @@ class vLLM():
         logger.info(f" --> Adding request ** {head_req.ReqId} ** to running queue with token length of ** {head_req.token_len} **. Memory Available: {self.Device.get_available_memory()} ")
         self._add_to_running_queue(head_req)
 
-
     def _add_to_vllm_queue(self, request: RequestElement):
         '''
         Adds to waiting queue. But if waiting queue is empty adds to running queue
@@ -348,6 +369,12 @@ class vLLM():
         else:
             self._add_to_waiting_queue(request)
 
+    async def add_new_request_wait(self, request: RequestElement):
+        completionEvent = asyncio.Event()
+        request.event = completionEvent
+        self.add_new_request(request)
+        await completionEvent.wait()
+        self.remove_finished_request(request)
 
     def add_new_request(self, request: RequestElement):    #TODO: We assume only 1 vLLM instance. Eventually the Request will be added as Request element at a global queue and then fed to vLLM queue
         '''
@@ -386,35 +413,37 @@ class vLLM():
         else:
             return False
 
-    def one_iteration(self):
+    async def one_iteration(self):
         # TODO: In speculative decoding, there might be more than one token for some requets
         ## Step all running requests by one
         #logger.critical("------------- vLLM iteration starting: generating next set of tokens -----------")
-        curr_time = self.Clock.time_step()
+        curr_time = await self.Clock.time_step()
         for req in self.running_queue:
-            no_new_tokens = 1                                         # TODO: Assumes ony one token per request
+            no_new_tokens = 1                                         # TODO: Assumes only one token per request
             mem_required = self.Model.KVcachePerToken * no_new_tokens
             self.Device.use_memory(mem_required)
             req.add_new_tokens(no_new_tokens, curr_time)
             if req.stage == 'finished':
                 self.finished_queue.append(req)
                 self._remove_from_running_queue(req)
+                if req.event != None:
+                    req.event.set() # notify waiters
                 logger.info(f"~*~ Finished request {req.ReqId}. Output token length {req.token_len}")
 
         #logger.critical("******** Making eviction and admitting decisions for next iteration ******")
         if not self._evict_requests_for_next_iteration():   ## TODO: In iteration we evict requests we dont add any request, since evicted request will be at head of waiting quque.
             self._add_requests_for_next_iteration()
 
-    def run(self):
+    async def run(self):
+        if not MUTE_PRINT:
+            print("Starting spec reporter")
+            asyncio.create_task(self.run_print_spec())
+
         iter_no = 0
         while not self.stop:
             iter_no += 1
             logger.debug(f"---------- Iteration numer {iter_no} -------------")
-            if not MUTE_PRINT:
-                self.print_spec()
-            self.one_iteration()
-
-
+            await self.one_iteration()
 
 class vLLM_varitaion_sorted_wq(vLLM):
     def __init__(self, device : Device, clock : Clock, model : Model):

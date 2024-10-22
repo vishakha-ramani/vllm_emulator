@@ -1,4 +1,6 @@
 vllm_emulator/logs/
+vegeta
+
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
