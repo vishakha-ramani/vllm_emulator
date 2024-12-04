@@ -4,6 +4,7 @@ import time
 import datetime
 import re
 import asyncio
+import os
 
 from fastapi import FastAPI
 from typing import List, Optional
@@ -19,8 +20,8 @@ from vllm_model import *
 from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
-    # Name or path of the huggingface model to use
-    model: str = "default"
+    # Use the environment variable for the model name
+    model: str = os.getenv('MODEL_NAME', 'default')  # Default to 'default' if not set
     # Time for one decode run in ms (inter-token latency) #TODO: Assumed independent of batch size or no of tokens generated
     decode_time: int = DECODE_TIME
     # Model size in MB

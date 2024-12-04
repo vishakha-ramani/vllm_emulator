@@ -297,9 +297,9 @@ class vLLM():
         Checks if this device has enough memory to run this request for atlest one token.
         Has to account for all current requests on the device
         '''
-        #print(f"Can run: {request.ReqId}, {request.token_len}")
-        #print(f"Req memory {self._mem_requirement(request) + self.Model.KVcachePerToken * (len(self.running_queue) + 1)}")
-        #print(f"Available: {self.Device.get_available_memory()} ")
+        print(f"Can run: {request.ReqId}, {request.token_len}")
+        print(f"Req memory {self._mem_requirement(request) + self.Model.KVcachePerToken * (len(self.running_queue) + 1)}")
+        print(f"Available: {self.Device.get_available_memory()} ")
         assert self._mem_requirement(request) < self.max_kvcache_mem , f"{request.InputTokenLength}, but {self.max_kvcache_mem}"   ### Request should be smaller than what can be fit in the GPU
         if self.Device.check_memory_availability( self._mem_requirement(request) + self.Model.KVcachePerToken * (len(self.running_queue) + 1) ): # should be able to generate atleast one more token than input (along with 1 token for all req in running quque)
             return True
@@ -326,7 +326,7 @@ class vLLM():
 
     def _remove_from_running_queue(self, request : RequestElement):
         '''
-        Remove a given request from waiting queue because 1. it finished or 2. it's evicted
+        Remove a given request from running queue because 1. it finished or 2. it's evicted
         Which request is to be evicted, that policy is separate - see where this fucntion is used.
         '''
         self.Device.release_memory(self._mem_requirement(request))
@@ -344,7 +344,7 @@ class vLLM():
     ### TODO: Policy for eviction between running and waiting queue of VLLM
     def _move_from_running_to_waiting_queue(self): # NOTE: currently just moves tail of running queue to the head of running queue
         '''
-        Remove from running quque and insert at the head of waiting queue
+        Remove from running queue and insert at the head of waiting queue
         '''
         tail_req = self.running_queue[-1]
         self._remove_from_running_queue(tail_req)
@@ -374,6 +374,8 @@ class vLLM():
         request.event = completionEvent
         self.add_new_request(request)
         await completionEvent.wait()
+        # update metrics: total number of tokens generated
+        self.metrics.counter_tokens_total.labels(model_name=self.Model.model_name).inc(request.token_len)
         self.remove_finished_request(request)
 
     def add_new_request(self, request: RequestElement):    #TODO: We assume only 1 vLLM instance. Eventually the Request will be added as Request element at a global queue and then fed to vLLM queue
@@ -381,6 +383,8 @@ class vLLM():
         Add a new request to vLLM quque. Either it runs right away or waits at the end of waiting queue
         '''
         request.arrival_time = self.Clock.get_curr_time()
+        # update metrics: total number of request arrivals
+        self.metrics.counter_scheduler_total.labels(model_name=self.Model.model_name).inc()
         self._add_to_vllm_queue(request)
 
     def _evict_requests_for_next_iteration(self):
