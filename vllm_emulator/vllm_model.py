@@ -384,7 +384,7 @@ class vLLM():
         '''
         request.arrival_time = self.Clock.get_curr_time()
         # update metrics: total number of request arrivals
-        self.metrics.counter_scheduler_total.labels(model_name=self.Model.model_name).inc()
+        self.metrics.counter_requests_total.labels(model_name=self.Model.model_name).inc()
         self._add_to_vllm_queue(request)
 
     def _evict_requests_for_next_iteration(self):

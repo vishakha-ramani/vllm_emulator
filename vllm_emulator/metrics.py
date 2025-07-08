@@ -27,7 +27,7 @@ class Metrics:
         whose value can only increase or be reset to zero on restart. 
         For example, you can use a counter to represent the number of requests served, tasks completed, or errors.
         """
-        self.counter_scheduler_total = prometheus_client.Counter(
+        self.counter_requests_total = prometheus_client.Counter(
             name="vllm:requests_count", # prometheus adds a _total suffix at the end
             documentation="Total number of requests received.",
             labelnames=labelnames)
