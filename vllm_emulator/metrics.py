@@ -39,3 +39,19 @@ class Metrics:
             name="vllm:tokens_count", # prometheus adds a _total suffix at the end
             documentation="Total number of tokens generated.",
             labelnames=labelnames)
+        
+        request_latency_buckets = [
+            0.3, 0.5, 0.8, 1.0, 1.5, 2.0, 2.5, 5.0, 10.0, 15.0, 20.0, 30.0,
+            40.0, 50.0, 60.0, 120.0, 240.0, 480.0, 960.0, 1920.0, 7680.0
+        ]
+
+        """
+        Histogram for time spent in waiting
+        """
+        self.histogram_queue_time_request = prometheus_client.Histogram(
+        name="vllm:request_queue_time_seconds",
+        documentation="Histogram of time spent in WAITING phase for request.",
+        labelnames=labelnames,
+        # buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60) # customize if needed
+        buckets=request_latency_buckets
+        )  

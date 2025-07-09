@@ -8,6 +8,20 @@ To build the container image running the emulator, run this command:
 $ docker build -t vllme .
 ```
 
+## Switch context to kind-kind
+```bash
+kubectl config use-context kind-kind 
+```
+
+## Load image in the kind cluster
+Use the kind load docker-image command. You'll need to specify the image name and tag. In your case, it's vllme:latest. If you have multiple kind clusters, you'll also need to specify the cluster name using the --name flag.
+
+Assuming your kind cluster is named kind (the default), the command would be:
+```bash
+kind load docker-image vllme:latest
+```
+
+
 ## vllme metrics in Prometheus
 We use prometheus operator to monitor the deployments. 
 

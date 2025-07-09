@@ -8,6 +8,7 @@ DECODE_TIME   = Time per decode step in ms - assumed independent of batch size o
 NOTE: Prefill has not been modelled. Prefill and decode are assumed to take same time.
 
 '''
+import math
 import random
 import asyncio
 from pathlib import Path
@@ -178,6 +179,7 @@ class RequestElement(Request):
         self.stage       = 'not_run_yet'       # 'not_run_yet', 'waiting', 'decode' or 'prefill' or 'finished' # NOTE: not using prefill currently
 
         self.event = None                      # completion event to be set when the request terminates
+        self.entered_waiting_queue_time = -(math.inf)     # time that the request entered in waiting queue
 
 
     def add_new_tokens(self, num_tokens, curr_time):
@@ -321,6 +323,7 @@ class vLLM():
         Add a new incoming request to vLLM waiting queue.
         TODO: waiting_queue's append can be modified to do more elaborate append eg: priority queue
         '''
+        request.entered_waiting_queue_time = self.Clock.get_curr_time() / 1000  # seconds
         self.waiting_queue.append(request)
         self.metrics.gauge_scheduler_waiting.labels(model_name=self.Model.model_name).inc()
 
@@ -354,6 +357,12 @@ class vLLM():
     ### TODO: Policy for adding from waiting queue to running queue of vLLM
     def _move_from_waiting_to_running_queue(self):  #TODO: Currently moves head of waiting queue to tail of runnign queqe
         head_req = self.waiting_queue.pop(0)
+
+        now = self.Clock.get_curr_time() / 1000  # seconds
+        wait_time = now - getattr(head_req, 'entered_waiting_queue_time', now)
+        if math.isfinite(wait_time) and wait_time >= 0:
+            self.metrics.histogram_queue_time_request.labels(model_name=self.Model.model_name).observe(wait_time)
+
         logger.info(f" --> Adding request ** {head_req.ReqId} ** to running queue with token length of ** {head_req.token_len} **. Memory Available: {self.Device.get_available_memory()} ")
         self._add_to_running_queue(head_req)
 

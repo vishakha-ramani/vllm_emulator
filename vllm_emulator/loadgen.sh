@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # Path to the client script
-CLIENT_SCRIPT="premium-llama-13b-client.py"
+CLIENT_SCRIPT="client.py"
 
 # Poisson process parameters
-LAMBDA_RATE=10  # Requests per minute (mean arrival rate)
+LAMBDA_RATE=20  # Requests per minute (mean arrival rate)
 MEAN_INTERVAL=$((60 / LAMBDA_RATE))  # Average interarrival time in seconds
 
 # Check if the client script exists
