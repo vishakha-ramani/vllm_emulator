@@ -8,14 +8,16 @@ DECODE_TIME   = Time per decode step in ms - assumed independent of batch size o
 NOTE: Prefill has not been modelled. Prefill and decode are assumed to take same time.
 
 '''
-import math
-import random
 import asyncio
-from pathlib import Path
-from metrics import Metrics
-
 ####----------------------------------- Logging Setup --------------------------------------
 import logging
+import math
+import os
+import random
+from pathlib import Path
+
+from metrics import Metrics
+
 logger = logging.getLogger(__name__)
 #FORMAT = "[%(filename)s:%(lineno)s - %(funcName)20s() - %(levelname)-5.5s] %(message)s"
 FORMAT = "[%(levelname)-5.5s] %(message)s"
@@ -36,17 +38,24 @@ elif PRINT_WHERE == "FILE_ONLY":
 ###---------------------------------- Global Settings -------------------------------------
 
 D = 1        # D devices
-M = 80000    # MB (80 GB)
 
 KVC_PER_TOKEN = 100     # KVCache size for one Token in MB # will be different for different models : https://developer.nvidia.com/blog/mastering-llm-techniques-inference-optimization/
-DECODE_TIME   = 50      # time for one decode run in ms (inter-token latency) #TODO: Assumed independent of batch size or no of tokens generated
-PREFILL_TIME  = 100     # NOTE: Not considered yet. Time for prefill run. Assumed independent of request length #TODO: If two request are added together, will they take same Prefill time or twice the prefill time?
 
 MAX_SEQ_LEN   = 2048      # TODO: Currently not used
 INF           = float('inf')
 
 REALTIME_FLAG = True     # Simulation will be realtime. Each clock step will have a sleep of step_time
 MUTE_PRINT    = False
+
+# time for one decode run in ms (inter-token latency) #TODO: Assumed independent of batch size or no of tokens generated
+DECODE_TIME: int = os.getenv('DECODE_TIME', 50)
+# NOTE: Not considered yet. Time for prefill run. Assumed independent of request length #TODO: If two request are added together, will they take same Prefill time or twice the prefill time?
+PREFILL_TIME: int = os.getenv('PREFILL_TIME', 100)
+
+# MB (80 GB)
+M: int = os.getenv('MEM_SIZE', 80000)
+# Model size in MB
+MODEL_SIZE: int = os.getenv('MODEL_SIZE', 25000)
 
 ###------------------------------- Classes ----------------------------------------------
 
@@ -262,7 +271,7 @@ class vLLM():
     Class models then functioning of vLLM. Child classes can be created to emulate
     different run queue, waiting queue policies etc.
     '''
-    def __init__(self, device : Device, clock : Clock, model : Model, metrics : Metrics):
+    def __init__(self, device : Device, clock : Clock, model : Model, metrics : Metrics, max_batch_size: int):
         self.Device = device
         self.Clock = clock
         self.Model = model
@@ -275,6 +284,8 @@ class vLLM():
 
         self.max_kvcache_mem = self.Device.load_model(self.Model)
         self.metrics = metrics
+
+        self.max_batch_size = max_batch_size
 
     async def run_print_spec(self):
         while True:
@@ -295,6 +306,12 @@ class vLLM():
         return (request.token_len) * self.Model.KVcachePerToken
 
     def _can_request_run(self, request : RequestElement):
+        '''
+        Check if max batch size is satisfied
+        '''
+        if len(self.running_queue) + 1 > self.max_batch_size:
+            return False
+                
         '''
         Checks if this device has enough memory to run this request for atlest one token.
         Has to account for all current requests on the device
@@ -459,8 +476,8 @@ class vLLM():
             await self.one_iteration()
 
 class vLLM_varitaion_sorted_wq(vLLM):
-    def __init__(self, device : Device, clock : Clock, model : Model):
-        super().__init__(device, clock, model)
+    def __init__(self, device : Device, clock : Clock, model : Model, max_batch_size: int):
+        super().__init__(device, clock, model, max_batch_size=max_batch_size)
         self.waiting_queue  = get_queue_of_type("sorted_by_token_len")
 
 
@@ -468,12 +485,20 @@ class vLLM_varitaion_sorted_wq(vLLM):
 ########################################################################################################################################################################
 
 class Load():
-    def __init__(self, avg_generated_len, distribution = 'uniform'):
+    def __init__(self, avg_generated_len, distribution):
         self.Distribution = distribution
         self.AvgLen       = avg_generated_len
 
     def _get_generated_len(self):
-        return random.randint(0, 2*self.AvgLen)
+        match self.Distribution:
+            case "uniform":
+                return random.randint(0, 2*self.AvgLen)
+            case "uniform-narrow":
+                return random.randint(self.AvgLen/2, 3*self.AvgLen/2)
+            case "deterministic":
+                return self.AvgLen
+            case _:
+                return self.AvgLen
 
     def get_output_len(self, input_len):
         return input_len + self._get_generated_len()

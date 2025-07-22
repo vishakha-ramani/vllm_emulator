@@ -1,8 +1,7 @@
 import random
-import time
-import numpy 
-import matplotlib.pyplot as plt
 
+import matplotlib.pyplot as plt
+import numpy
 from vllm_model import *
 
 open('logs/run.log', 'w').close() #clear logs
@@ -31,9 +30,9 @@ for var in VARIATIONS:
         gpu   = Device(device_id = 1, net_memory = M, useable_ratio = 0.8)
 
         if var == 'normal':
-            vllmi = vLLM( device=gpu, clock=clock, model=model)
+            vllmi = vLLM( device=gpu, clock=clock, model=model, max_batch_size=100)
         elif var == 'wq_sorted_by_input_length':
-            vllmi = vLLM_varitaion_sorted_wq( device=gpu, clock=clock, model=model)
+            vllmi = vLLM_varitaion_sorted_wq( device=gpu, clock=clock, model=model, max_batch_size=100)
 
         ##### Generate aritificial requests ######
 
