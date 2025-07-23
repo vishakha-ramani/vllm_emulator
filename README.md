@@ -195,3 +195,29 @@ The URL for prometheus source in default namespace is:
 ```sh
 http://prometheus-operated.default.svc.cluster.local:9090
 ```
+
+
+## Sanity checks
+First we need to send the client requests. Run
+```bash
+kubectl port-forward svc/vllme-service 30000:80
+```
+
+Then on another terminal, run 
+```bash
+./loadgen.sh
+```
+
+To see if vllme metrics are properly exposed, the first step is to:
+```bash
+kubectl port-forward svc/vllme-service 8000:80
+```
+go to `http://localhost:8000/metrics` and check if you see metrics starting with `vllm:`. Refresh to see the values changing with the load generator on.
+
+To see prometheus dashboard:
+```bash
+kubectl port-forward svc/prometheus-operated 9090:9090
+```
+Then go to `http://localhost:9090`. First see if under status -> target health, you can see vllme-servicemonitor up.
+Then go to Query tab and write `vllm:`. Prometheus should show you all the vllm: metrics exposed by vllme. If not, then there is some problem. 
+

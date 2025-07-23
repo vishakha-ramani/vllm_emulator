@@ -1,3 +1,4 @@
+.DS_Store
 vllm_emulator/logs/
 vegeta
 
