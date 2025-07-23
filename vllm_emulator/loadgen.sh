@@ -4,7 +4,11 @@
 CLIENT_SCRIPT="client.py"
 
 # Poisson process parameters
-LAMBDA_RATE=20  # Requests per minute (mean arrival rate)
+rpm=20
+if [ -n "$1" ]; then
+  rpm=$1
+fi
+LAMBDA_RATE=$rpm  # Requests per minute (mean arrival rate)
 MEAN_INTERVAL=$((60 / LAMBDA_RATE))  # Average interarrival time in seconds
 
 # Check if the client script exists
@@ -19,7 +23,7 @@ generate_interarrival_time() {
 }
 
 # Main loop to launch client instances
-echo "Starting Poisson-distributed client launcher..."
+echo "Starting Poisson-distributed client launcher at $rpm RPM ..."
 while true; do
   # Launch the client script in the background
   # echo "Launching a new client instance..."

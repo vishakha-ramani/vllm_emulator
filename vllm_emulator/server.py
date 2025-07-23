@@ -1,23 +1,22 @@
 ## https://towardsdatascience.com/how-to-build-an-openai-compatible-api-87c8edea2f06
 
-import time
-import datetime
-import re
 import asyncio
+import datetime
 import os
+import re
+import time
+from contextlib import asynccontextmanager
+from typing import List, Optional
 
 from fastapi import FastAPI
-from typing import List, Optional
-from pydantic import BaseModel
-from contextlib import asynccontextmanager
 from prometheus_client import make_asgi_app
+from pydantic import BaseModel
+from pydantic_settings import BaseSettings
 from starlette.routing import Mount
-
+from vllm_model import *
 
 ############################################  SETUP vLLM Emulator #####################################################
 
-from vllm_model import *
-from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     # Use the environment variable for the model name
@@ -25,9 +24,15 @@ class Settings(BaseSettings):
     # Time for one decode run in ms (inter-token latency) #TODO: Assumed independent of batch size or no of tokens generated
     decode_time: int = DECODE_TIME
     # Model size in MB
-    model_size: int = 25000
+    model_size: int = MODEL_SIZE
     # KVCache size for one token in MB
     kvc_per_token: int = KVC_PER_TOKEN
+    # average number of tokens in message
+    avg_generated_len: int = os.getenv('AVG_TOKENS', 100)
+    # distribution of number of tokens per request
+    tokens_distribution: str = os.getenv('TOKENS_DISTRIBUTION', "uniform")
+    # maximum batch size
+    max_batch_size: int = os.getenv('MAX_BATCH_SIZE', 1)
 
 
 settings = Settings()
@@ -40,8 +45,8 @@ metrics = Metrics(labelnames=labels) # register metrics
 
 gpu   = Device(device_id = 1, net_memory = M, metrics = metrics, model_name = settings.model, useable_ratio = 0.8)
 
-vllmi = vLLM( device=gpu, clock=clock, model=model, metrics=metrics)
-load  = Load( avg_generated_len = 100, distribution = 'uniform')
+vllmi = vLLM( device=gpu, clock=clock, model=model, metrics=metrics, max_batch_size=settings.max_batch_size)
+load  = Load( settings.avg_generated_len, settings.tokens_distribution)
 
 
 ######################################################################################################################
