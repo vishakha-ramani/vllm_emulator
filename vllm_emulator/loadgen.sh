@@ -4,6 +4,7 @@
 CLIENT_SCRIPT="client.py"
 
 # Poisson process parameters
+LAMBDA_RATE=5  # Requests per minute (mean arrival rate)
 rpm=20
 if [ -n "$1" ]; then
   rpm=$1
